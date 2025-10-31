@@ -56,27 +56,49 @@ def login(user: UserAuth, db: Session = Depends(get_db)):
         "username": user.username
     }
 
+# ✨ [SỬA] API GET /api/me - Lấy thông tin user hiện tại (dùng cho editProfile)
 @router.get("/me", response_model=schemas.MeRead)
 def getMe(user: dict = Depends(jwt_auth.auth), db: Session = Depends(get_db)):
-    """Return current authenticated user with related profiles (student_profile / teacher_profile)."""
+    """
+    Return current authenticated user with related profiles (student_profile / teacher_profile).
+
+    ✨ [SỬA] Được gọi từ profile.js:
+    - fetchProfile() - Load data khi vào trang editProfile
+    - updateProfile() - Reload sidebar sau khi update
+    - studentHome.js - Reload thông tin khi quay lại
+    """
     db_user = crud.get_user_by_username(db, user.get('username'))
     if not db_user:
         raise HTTPException(404, detail="User not found")
     return db_user
 
 
+# ✨ [SỬA] API PUT /api/me - Cập nhật thông tin user (dùng cho editProfile)
 @router.put("/me", response_model=schemas.MeRead)
 def update_me(update: schemas.UserUpdate, user: dict = Depends(jwt_auth.auth), db: Session = Depends(get_db)):
-    """Update current user's profile and related student/teacher records."""
+    """
+    Update current user's profile and related student/teacher records.
+
+    ✨ [SỬA] Nhận dữ liệu từ profile.js updateProfile() function
+    - full_name: Họ tên
+    - email: Email
+    - password: Mật khẩu (optional)
+    - birthdate: Ngày sinh (sinh viên)
+    - student_code: Mã sinh viên (sinh viên)
+    - department: Khoa (giáo viên)
+    - title: Chức danh (giáo viên)
+    """
     db_user = crud.get_user_by_username(db, user.get('username'))
     if not db_user:
         raise HTTPException(404, detail="User not found")
 
     data = update.model_dump(exclude_unset=True)
 
+    # ✨ [SỬA] Cập nhật mật khẩu nếu có
     if 'password' in data and data['password']:
         db_user.password = jwt_auth.hash_password(data.pop('password'))
 
+    # ✨ [SỬA] Cập nhật thông tin cơ bản user
     for field in ['full_name', 'email', 'role']:
         if field in data:
             setattr(db_user, field, data.pop(field))
@@ -85,6 +107,7 @@ def update_me(update: schemas.UserUpdate, user: dict = Depends(jwt_auth.auth), d
     if 'role' in update.__fields_set__:
         effective_role = update.role.value if hasattr(update.role, 'value') else update.role
 
+    # ✨ [SỬA] Cập nhật thông tin sinh viên
     if str(effective_role) == 'student':
         student = crud.get_student(db, db_user.user_id)
         if student:
@@ -100,6 +123,7 @@ def update_me(update: schemas.UserUpdate, user: dict = Depends(jwt_auth.auth), d
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"Failed to create student profile: {e}")
 
+    # ✨ [SỬA] Cập nhật thông tin giáo viên
     if str(effective_role) == 'teacher':
         teacher = crud.get_teacher(db, db_user.user_id)
         if teacher:
@@ -114,9 +138,16 @@ def update_me(update: schemas.UserUpdate, user: dict = Depends(jwt_auth.auth), d
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"Failed to create teacher profile: {e}")
 
-    db.commit()
-    db.refresh(db_user)
-    return db_user
+    # ✨ [SỬA] Lưu thay đổi vào database
+    try:
+        db.commit()
+        db.refresh(db_user)
+        print(f"✅ [PUT /api/me] Update successful for {user.get('username')}") # ✨ [DEBUG]
+        return db_user
+    except Exception as e:
+        print(f"❌ [PUT /api/me] Database error: {e}") # ✨ [DEBUG]
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
 class UpdateRoleRequest(BaseModel):
